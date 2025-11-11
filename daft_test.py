@@ -1,39 +1,32 @@
-from datetime import datetime
+import os
 import daft
-from pyiceberg.table import StaticTable
+from daft import col
+import daft.functions as F
+from datetime import datetime
 
-t0 = datetime.now()
+t1 = datetime.now()
 
-# 1) Load Iceberg table directly from metadata (no catalog needed)
-table = StaticTable.from_metadata(
-    "s3://confessions-of-a-data-guy/TBtest/catalog/wendigo/social_media_eats_your_brains/metadata/00101-36917495-22c6-40e7-b331-a8148402e897.metadata.json"
+table_path = "s3://confessions-of-a-data-guy/BigTest/social_media_rots_brains"
+os.environ["AWS_ACCESS_KEY_ID"] = "xxxxxxxx"
+os.environ["AWS_SECRET_ACCESS_KEY"] = "xxxxxxxxxxxxxxx"
+os.environ["AWS_DEFAULT_REGION"] = "us-east-1"
+
+df = daft.read_deltalake(table_path)
+
+df = df.with_column(
+    "created_at_ts",
+    F.to_datetime(col("created_at"), "%Y-%m-%d %H:%M:%S")
 )
 
-# 2) Create a Daft DataFrame
-social_media_eats_your_brains = daft.read_iceberg(table)  # <- the variable name is the SQL table name
-
-# 3) Run your SQL via daft.sql(); it can reference the DF by variable name
-query = """
-WITH t AS (
-  SELECT
-    user_id,
-    post_type,
-    CAST(likes_count AS BIGINT) AS likes_count
-  FROM social_media_eats_your_brains
+agg = (
+    df.with_column("post_date", F.date(col("created_at_ts")))
+      .groupby("post_date")
+      .count()                                # produces a 'count' column
+      .with_column_renamed("count", "num_posts")
+      .sort("post_date")
 )
-SELECT 
-    COUNT(*)                           AS total_posts,
-    COUNT(DISTINCT user_id)            AS unique_users,
-    COUNT(DISTINCT post_type)          AS unique_post_types,
-    COUNT(likes_count)                 AS posts_with_likes,
-    AVG(likes_count)                   AS avg_likes,
-    MAX(likes_count)                   AS max_likes,
-    SUM(likes_count)                   AS total_likes
-FROM t;
-"""
 
-result = daft.sql(query).collect()
+agg.repartition(1).write_csv("posts_per_day.csv")
 
-print("\n📊 Results:")
-print(result.to_pydict())
-print("⏱️ Duration:", datetime.now() - t0)
+t2 = datetime.now()
+print(f"Elapsed: {t2 - t1}")
